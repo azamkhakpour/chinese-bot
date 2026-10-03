@@ -1,0 +1,83 @@
+import os
+import json
+import requests
+from gtts import gTTS
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+
+# اینجا توکن واقعی خودت را بگذار
+TELEGRAM_BOT_TOKEN = "8772529922:AAHAwqbYpOjeu3ZUZzb2ai8SXXvOfaxc75I" 
+AVALAI_API_KEY = "GAPGPTMASKTOKENo7yp5czvffX0X"
+
+SYSTEM_PROMPT = (
+    "You are a street-smart Chinese language learning assistant. "
+    "When the user speaks to you, respond naturally in colloquial, everyday spoken Chinese. "
+    "Always output strictly in valid JSON format with these exact keys: ZH, PY, FA_PRON, FA, EN. "
+    "ZH: Chinese characters, PY: Pinyin, FA_PRON: Persian phonetic approximation, "
+    "FA: Natural Persian translation, EN: Natural English translation. "
+    "Do not include any markdown or code blocks. Return only JSON object."
+)
+
+def get_ai_response(user_text):
+    url = "https://api.avalai.ir/v1/chat/completions"
+    headers = {
+        "Authorization": "Bearer " + AVALAI_API_KEY,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_text}
+        ]
+    }
+    # برای AVALAI چون روی اینترنت آزاد است، احتمالا نیازی به پروکسی داخل درخواست requests نیست
+    res = requests.post(url, headers=headers, json=payload, timeout=35)
+    data = res.json()
+    if "choices" in data and len(data["choices"]) > 0:
+        return data["choices"][0]["message"]["content"]
+    else:
+        raise Exception(str(data))
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("سلام رفیق! آماده‌ای چینی یاد بگیری؟ 🇨🇳")
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.message.text
+    status_msg = await update.message.reply_text("در حال پردازش... ⏳")
+
+    try:
+        raw_response = get_ai_response(user_text)
+        bt = chr(96)
+        cleaned = raw_response.replace(bt * 3 + "json", "").replace(bt * 3, "").strip()
+        parsed = json.loads(cleaned)
+
+        zh_text = parsed.get("ZH", "")
+        py_text = parsed.get("PY", "")
+        fa_pron = parsed.get("FA_PRON", "")
+        fa_text = parsed.get("FA", "")
+        en_text = parsed.get("EN", "")
+
+        msg = (f"🇨🇳 {zh_text}\n\n📖 {py_text}\n\n🗣 {fa_pron}\n\n🇮🇷 {fa_text}\n\n🇬🇧 {en_text}")
+        await status_msg.edit_text(msg)
+
+        if zh_text:
+            voice_file = f"voice_{update.message.chat_id}.mp3"
+            tts = gTTS(text=zh_text, lang='zh-CN')
+            tts.save(voice_file)
+            with open(voice_file, 'rb') as audio:
+                await update.message.reply_voice(voice=audio)
+            if os.path.exists(voice_file): os.remove(voice_file)
+
+    except Exception as e:
+        await status_msg.edit_text(f"⚠️ خطا: {e}")
+
+if __name__ == '__main__':
+    print("🚀 ربات در حال راه‌اندازی (بدون پروکسی)...")
+    # حذف کامل request=... که باعث خطا می‌شد
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    app.run_polling()
